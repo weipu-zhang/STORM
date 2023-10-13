@@ -1,0 +1,12 @@
+torch
+torchaudio
+torchvision
+yacs
+tensorboardX
+tensorboard
+moviepy
+colorama
+einops
+tqdm
+opencv-python
+gymnasium[atari,accept-rom-license]
