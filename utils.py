@@ -11,12 +11,6 @@ from yacs.config import CfgNode as CN
 
 
 def seed_np_torch(seed=20001118):
-    '''
-    设置整个开发环境的seed
-    :param seed:
-    :param device:
-    :return:
-    '''
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
