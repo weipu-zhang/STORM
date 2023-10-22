@@ -242,7 +242,7 @@ if __name__ == "__main__":
 
         # build world model and agent
         world_model = build_world_model(conf, action_dim)
-        agent = build_(conf, action_dim)
+        agent = build_agent(conf, action_dim)
 
         # build replay buffer
         replay_buffer = ReplayBuffer(
