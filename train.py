@@ -197,7 +197,7 @@ def build_world_model(conf, action_dim):
     ).cuda()
 
 
-def build_agnet(conf, action_dim):
+def build_agent(conf, action_dim):
     return agents.ActorCriticAgent(
         feat_dim=32*32+conf.Models.WorldModel.TransformerHiddenDim,
         num_layers=conf.Models.Agent.NumLayers,
@@ -242,7 +242,7 @@ if __name__ == "__main__":
 
         # build world model and agent
         world_model = build_world_model(conf, action_dim)
-        agent = build_agnet(conf, action_dim)
+        agent = build_(conf, action_dim)
 
         # build replay buffer
         replay_buffer = ReplayBuffer(
