@@ -390,7 +390,7 @@ class WorldModel(nn.Module):
             # decoding image
             obs_hat = self.image_decoder(flattened_sample)
 
-            # spatial-termporal transformer
+            # transformer
             temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
             dist_feat = self.storm_transformer(flattened_sample, action, temporal_mask)
             prior_logits = self.dist_head.forward_prior(dist_feat)
