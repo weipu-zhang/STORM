@@ -290,7 +290,6 @@ class WorldModel(nn.Module):
 
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            # spatial-termporal transformer
             dist_feat = self.storm_transformer.forward_with_kv_cache(last_flattened_sample, action)
             prior_logits = self.dist_head.forward_prior(dist_feat)
 
