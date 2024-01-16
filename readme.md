@@ -1,4 +1,6 @@
-# Implementation of STORM: Efficient Stochastic Transformer basedWorld Models for Reinforcement Learning
+# Implementation of STORM: Efficient Stochastic Transformer based World Models for Reinforcement Learning
+
+[Paper & OpenReview](https://openreview.net/forum?id=WxnrX42rnS), you may find some useful discussion there.
 
 This repo contains an implementation of STORM. 
 
