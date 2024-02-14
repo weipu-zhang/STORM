@@ -39,8 +39,6 @@ Following the **Training and Evaluating Instructions** to reproduce the main res
 
     - The `-config_path` points to a YAML file that controls the model's hyperparameters. The configuration in `config_files/STORM.yaml` is the same as in our paper.
 
-    - `-config_path` leads to a yaml file controlling the model's hyperparameters. The configuration in `config_files/STORM.yaml` is the same with our paper.
-
     - The `-trajectory_path` is only useful when the option `UseDemonstration` in the YAML file is set to `True` (by default it's `False`). This corresponds to the ablation studies in Section 5.3. We provide the precollected trajectories in the `D_TRAJ.7z` file, and you need to decompress it for using (to a `D_TRAJ` folder).
     
 
