@@ -87,11 +87,11 @@ We've referenced several other projects during the development of this code:
 
 ```
 @inproceedings{
-zhang2023storm,
-title={{STORM}: Efficient Stochastic Transformer based World Models for Reinforcement Learning},
-author={Weipu Zhang and Gang Wang and Jian Sun and Yetian Yuan and Gao Huang},
-booktitle={Thirty-seventh Conference on Neural Information Processing Systems},
-year={2023},
-url={https://openreview.net/forum?id=WxnrX42rnS}
+    zhang2023storm,
+    title={{STORM}: Efficient Stochastic Transformer based World Models for Reinforcement Learning},
+    author={Weipu Zhang and Gang Wang and Jian Sun and Yetian Yuan and Gao Huang},
+    booktitle={Thirty-seventh Conference on Neural Information Processing Systems},
+    year={2023},
+    url={https://openreview.net/forum?id=WxnrX42rnS}
 }
 ```
