@@ -1,5 +1,7 @@
 # Implementation of STORM: Efficient Stochastic Transformer based World Models for Reinforcement Learning
 
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/storm-efficient-stochastic-transformer-based-1/atari-games-100k-on-atari-100k)](https://paperswithcode.com/sota/atari-games-100k-on-atari-100k?p=storm-efficient-stochastic-transformer-based-1)
+
 [Paper & OpenReview](https://openreview.net/forum?id=WxnrX42rnS), you may find some useful discussion there.
 
 This repo contains an implementation of STORM. 
