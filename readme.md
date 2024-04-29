@@ -75,9 +75,13 @@ To reproduce the speed metrics mentioned in the paper, please consider the follo
 - Hardware requirements: NVIDIA GeForce RTX 3090 with a high frequence CPU, we use `11th Gen Intel(R) Core(TM) i9-11900K` in our experiments. Low frequence CPUs may lead to a GPU idle and slow down the traning. To make full use of a powerful GPU, one can traing several agents at the same time on one device.
 - Software requiements: `PyTorch>=2.0.0` is required.
 
-We also tested our code on other devices and identified some possible troubleshooting steps:
+## Troubleshooting
+### Mixed precision on other devices
 - Our experiments used bfloat16 to accelerate training. To train on devices that do not support bfloat16, such as the NVIDIA V100, you need to change `torch.bfloat16` to `torch.float16` in both `agents.py` and `sub_models/world_models.py`. Additionally, modify the line `attn = attn.masked_fill(mask == 0, -1e9)` to `attn = attn.masked_fill(mask == 0, -6e4)` to prevent overflow.
 - On devices like the NVIDIA A100, using bfloat16 may slow down the training. In this case, you can toggle the `self.use_amp = True` option in both `agents.py` and `sub_models/world_models.py`.
+
+### Windows and WSL
+We've recently observed if one **clones the repo** from `Powershell` and then calls `train.sh` under `WSL shell`, then it may throw an error related to arg parse. This may be due to invisible newlines in the files somehow generated when cloning with git. The solution is to download the zip or clone directly inside `WSL`.
 
 ## Code references
 We've referenced several other projects during the development of this code:
