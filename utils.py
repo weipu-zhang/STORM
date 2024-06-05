@@ -10,7 +10,7 @@ import yacs
 from yacs.config import CfgNode as CN
 
 
-def seed_np_torch(seed=20001118):
+def seed_np_torch(seed=20010105):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
