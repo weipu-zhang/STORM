@@ -313,7 +313,7 @@ class WorldModel(nn.Module):
 
     def encode_obs(self, obs):
         with torch.autocast(
-            device_type=device, dtype=torch.bfloat16, enabled=self.use_amp
+            device_type=device.type, dtype=torch.bfloat16, enabled=self.use_amp
         ):
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
@@ -325,7 +325,7 @@ class WorldModel(nn.Module):
 
     def calc_last_dist_feat(self, latent, action):
         with torch.autocast(
-            device_type=device, dtype=torch.bfloat16, enabled=self.use_amp
+            device_type=device.type, dtype=torch.bfloat16, enabled=self.use_amp
         ):
             temporal_mask = get_subsequent_mask(latent)
             dist_feat = self.storm_transformer(latent, action, temporal_mask)
@@ -339,7 +339,7 @@ class WorldModel(nn.Module):
 
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(
-            device_type=device, dtype=torch.bfloat16, enabled=self.use_amp
+            device_type=device.type, dtype=torch.bfloat16, enabled=self.use_amp
         ):
             dist_feat = self.storm_transformer.forward_with_kv_cache(
                 last_flattened_sample, action
@@ -501,7 +501,7 @@ class WorldModel(nn.Module):
         batch_size, batch_length = obs.shape[:2]
 
         with torch.autocast(
-            device_type=device, dtype=torch.bfloat16, enabled=self.use_amp
+            device_type=device.type, dtype=torch.bfloat16, enabled=self.use_amp
         ):
             # encoding
             embedding = self.encoder(obs)
