@@ -92,7 +92,12 @@ class ActorCriticAgent(nn.Module):
         self.upperbound_ema = EMAScalar(decay=0.99)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-5, eps=1e-5)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        # enable scaler based on device type
+        self.scaler = (
+            torch.cuda.amp.GradScaler(enabled=self.use_amp)
+            if device.type == "cuda"
+            else None
+        )
 
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
@@ -191,11 +196,16 @@ class ActorCriticAgent(nn.Module):
             )
 
         # gradient descent
-        self.scaler.scale(loss).backward()
-        self.scaler.unscale_(self.optimizer)  # for clip grad
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=100.0)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        if self.scaler is not None:
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)  # for clip grad
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
+            self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
 
         self.update_slow_critic()
