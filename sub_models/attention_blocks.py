@@ -190,13 +190,19 @@ class PositionalEncoding1D(nn.Module):
         feat = feat + pos_emb[:, : feat.shape[1], :]
         return feat
 
-    def forward_with_position(self, feat, position):
+    def forward_with_position(self, feat, position: int):
+        """
+        Add positional encoding to the feature at the given position.
+        """
         assert feat.shape[1] == 1
+        "The input feature should have a length of 1 at dim 1."
+
         pos_emb = self.pos_emb(torch.arange(self.max_length, device=feat.device))
         # Add a batch dimention: [L, D] -> [B, L, D]
         pos_emb = pos_emb.unsqueeze(0).expand(
             feat.shape[0], pos_emb.shape[0], pos_emb.shape[1]
         )
+        # Get the position embedding at the particular position
         feat = feat + pos_emb[:, position : position + 1, :]
         return feat
 
