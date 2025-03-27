@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import OneHotCategorical, Normal
-from einops import rearrange, repeat, reduce
+
+# from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 from torch.cuda.amp import autocast
 
@@ -12,19 +13,14 @@ from sub_models.attention_blocks import (
     get_subsequent_mask,
 )
 from sub_models.transformer_model import StochasticTransformerKVCache
+from sub_models.constants import DEVICE
 import agents
-
-device = torch.device(
-    "mps"
-    if torch.backends.mps.is_available()
-    else ("cuda" if torch.cuda.is_available() else "cpu")
-)
 
 
 class EncoderBN(nn.Module):
     def __init__(self, in_channels, stem_channels, final_feature_width) -> None:
         super().__init__()
-
+        # Create a sequence of convolutional layers
         backbone = []
         # stem
         backbone.append(
@@ -44,6 +40,7 @@ class EncoderBN(nn.Module):
 
         # layers
         while True:
+            # Keep adding layers until we reach the final feature width
             backbone.append(
                 nn.Conv2d(
                     in_channels=channels,
@@ -63,13 +60,15 @@ class EncoderBN(nn.Module):
                 break
 
         self.backbone = nn.Sequential(*backbone)
+        # Store the final number of channels
         self.last_channels = channels
 
     def forward(self, x):
         batch_size = x.shape[0]
-        x = rearrange(x, "B L C H W -> (B L) C H W")
+        x = x.reshape(-1, *x.shape[2:])  # [B, L, C, H, W] -> [B*L, C, H, W]
         x = self.backbone(x)
-        x = rearrange(x, "(B L) C H W -> B L (C H W)", B=batch_size)
+        # [B*L, C', H', W'] -> [B, L, C'*H'* W'];     H' = W' = 4
+        x = x.reshape(batch_size, -1, x.shape[1] * x.shape[2] * x.shape[3])
         return x
 
 
@@ -85,6 +84,7 @@ class DecoderBN(nn.Module):
         super().__init__()
 
         backbone = []
+        # Create a sequence of linear layer followed by de-convolutional layers
         # stem
         backbone.append(
             nn.Linear(
@@ -137,13 +137,17 @@ class DecoderBN(nn.Module):
     def forward(self, sample):
         batch_size = sample.shape[0]
         obs_hat = self.backbone(sample)
-        obs_hat = rearrange(obs_hat, "(B L) C H W -> B L C H W", B=batch_size)
+        # [B*L, C, H, W] -> [B, L, C, H, W]
+        obs_hat = obs_hat.reshape(batch_size, -1, *obs_hat.shape[1:])
         return obs_hat
 
 
 class DistHead(nn.Module):
     """
-    Dist: abbreviation of distribution
+    DistHead is a collection of different heads (mappings) of different latent spaces.
+    Like: Encoder to Posterior, Transformer to Prior, etc.
+    1. post_head: mapping from the encoder output to posterior distribution
+    2. prior_head: mapping from transformer hidden states to prior distribution
     """
 
     def __init__(self, image_feat_dim, transformer_hidden_dim, stoch_dim) -> None:
@@ -163,20 +167,27 @@ class DistHead(nn.Module):
         return logits
 
     def forward_post(self, x):
-        logits = self.post_head(x)
-        logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
+        logits = self.post_head(x)  # [B, L, C'*H'* W'] -> [B, L, K*K] ; K = stoch_dim
+        # Reshape: [B, L, K*K] -> [B, L, K, K]
+        logits = logits.reshape(logits.shape[0], logits.shape[1], self.stoch_dim, -1)
         logits = self.unimix(logits)
         return logits
 
     def forward_prior(self, x):
         logits = self.prior_head(x)
-        logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
+        # Reshape: [B, L, K*K] -> [B, L, K, K]
+        logits = logits.reshape(logits.shape[0], logits.shape[1], self.stoch_dim, -1)
         logits = self.unimix(logits)
         return logits
 
 
 class RewardDecoder(nn.Module):
-    def __init__(self, num_classes, embedding_size, transformer_hidden_dim) -> None:
+    """
+    Decode the reward from the transformer latent embeddings.
+    Final mapping: transformer_hidden_dim -> num_classes
+    """
+
+    def __init__(self, num_classes, transformer_hidden_dim) -> None:
         super().__init__()
         self.backbone = nn.Sequential(
             nn.Linear(transformer_hidden_dim, transformer_hidden_dim, bias=False),
@@ -195,7 +206,12 @@ class RewardDecoder(nn.Module):
 
 
 class TerminationDecoder(nn.Module):
-    def __init__(self, embedding_size, transformer_hidden_dim) -> None:
+    """
+    Decode the termination from the transformer latent embeddings.
+    Final mapping: transformer_hidden_dim -> 1
+    """
+
+    def __init__(self, transformer_hidden_dim) -> None:
         super().__init__()
         self.backbone = nn.Sequential(
             nn.Linear(transformer_hidden_dim, transformer_hidden_dim, bias=False),
@@ -223,7 +239,8 @@ class MSELoss(nn.Module):
 
     def forward(self, obs_hat, obs):
         loss = (obs_hat - obs) ** 2
-        loss = reduce(loss, "B L C H W -> B L", "sum")
+        # [B, L, C, H, W] -> [B, L]
+        loss = loss.sum(dim=(2, 3, 4))  # Sum over C, H, W dimensions
         return loss.mean()
 
 
@@ -236,7 +253,8 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
         p_dist = OneHotCategorical(logits=p_logits)
         q_dist = OneHotCategorical(logits=q_logits)
         kl_div = torch.distributions.kl.kl_divergence(p_dist, q_dist)
-        kl_div = reduce(kl_div, "B L D -> B L", "sum")
+        # [B, L, D] -> [B, L]
+        kl_div = kl_div.sum(dim=2)
         kl_div = kl_div.mean()
         real_kl_div = kl_div
         kl_div = torch.max(torch.ones_like(kl_div) * self.free_bits, kl_div)
@@ -263,6 +281,7 @@ class WorldModel(nn.Module):
         self.imagine_batch_size = -1
         self.imagine_batch_length = -1
 
+        # Instantiate the different modules
         self.encoder = EncoderBN(
             in_channels=in_channels,
             stem_channels=32,
@@ -293,14 +312,15 @@ class WorldModel(nn.Module):
         )
         self.reward_decoder = RewardDecoder(
             num_classes=255,
-            embedding_size=self.stoch_flattened_dim,
+            # embedding_size=self.stoch_flattened_dim,
             transformer_hidden_dim=transformer_hidden_dim,
         )
         self.termination_decoder = TerminationDecoder(
-            embedding_size=self.stoch_flattened_dim,
+            # embedding_size=self.stoch_flattened_dim,
             transformer_hidden_dim=transformer_hidden_dim,
         )
 
+        # All types of loss functions
         self.mse_loss_func = MSELoss()
         self.ce_loss = nn.CrossEntropyLoss()
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
@@ -309,23 +329,34 @@ class WorldModel(nn.Module):
         )
         self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+
+        # Enable scaler based on device type
+        self.scaler = (
+            torch.cuda.amp.GradScaler(enabled=self.use_amp)
+            if DEVICE.type == "cuda"
+            else None
+        )
 
     def encode_obs(self, obs):
+        """
+        Encode the observation using the encoder and sample from posterior.
+        """
+
         with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
         ):
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.stright_throught_gradient(
                 post_logits, sample_mode="random_sample"
             )
-            flattened_sample = self.flatten_sample(sample)
+            # Reshape: [B, L, K, K] -> [B, L, K*K]; K = stoch_dim
+            flattened_sample = sample.reshape(sample.shape[0], sample.shape[1], -1)
         return flattened_sample
 
     def calc_last_dist_feat(self, latent, action):
         with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
         ):
             temporal_mask = get_subsequent_mask(latent)
             dist_feat = self.storm_transformer(latent, action, temporal_mask)
@@ -339,7 +370,7 @@ class WorldModel(nn.Module):
 
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
         ):
             dist_feat = self.storm_transformer.forward_with_kv_cache(
                 last_flattened_sample, action
@@ -373,7 +404,8 @@ class WorldModel(nn.Module):
         return sample
 
     def flatten_sample(self, sample):
-        return rearrange(sample, "B L K C -> B L (K C)")
+        # Reshape: [B, L, K, K] -> [B, L, K*K]; K = stoch_dim
+        return sample.reshape(sample.shape[0], sample.shape[1], -1)
 
     def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype):
         """
@@ -400,14 +432,14 @@ class WorldModel(nn.Module):
                 self.transformer_hidden_dim,
             )
             scalar_size = (imagine_batch_size, imagine_batch_length)
-            self.latent_buffer = torch.zeros(latent_size, dtype=dtype, device=device)
-            self.hidden_buffer = torch.zeros(hidden_size, dtype=dtype, device=device)
-            self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
+            self.latent_buffer = torch.zeros(latent_size, dtype=dtype, device=DEVICE)
+            self.hidden_buffer = torch.zeros(hidden_size, dtype=dtype, device=DEVICE)
+            self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device=DEVICE)
             self.reward_hat_buffer = torch.zeros(
-                scalar_size, dtype=dtype, device=device
+                scalar_size, dtype=dtype, device=DEVICE.type
             )
             self.termination_hat_buffer = torch.zeros(
-                scalar_size, dtype=dtype, device=device
+                scalar_size, dtype=dtype, device=DEVICE.type
             )
 
     def imagine_data(
@@ -497,13 +529,16 @@ class WorldModel(nn.Module):
         )
 
     def update(self, obs, action, reward, termination, logger=None):
+        """
+        A Single training step of the world model using the observation, action, reward, and termination.
+        """
         self.train()
-        batch_size, batch_length = obs.shape[:2]
-
+        batch_size, batch_length = obs.shape[:2]  # B, L
         with torch.autocast(
-            device_type=device.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
         ):
-            # encoding
+            # Encoding and sampling from posterior
+            # [B, L, C, H, W] -> [B, L, K*K];   K = stoch_dim
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.stright_throught_gradient(
@@ -511,26 +546,30 @@ class WorldModel(nn.Module):
             )
             flattened_sample = self.flatten_sample(sample)
 
-            # decoding image
+            # Decoding image from the sample
+            # [B, L, K*K] -> [B, L, C, H, W]
             obs_hat = self.image_decoder(flattened_sample)
 
-            # transformer
+            # Transformer
             temporal_mask = get_subsequent_mask_with_batch_length(
-                batch_length, flattened_sample.device
+                batch_length, device=flattened_sample.contiguous().device
             )
-            dist_feat = self.storm_transformer(flattened_sample, action, temporal_mask)
-            prior_logits = self.dist_head.forward_prior(dist_feat)
-            # decoding reward and termination with dist_feat
-            reward_hat = self.reward_decoder(dist_feat)
-            termination_hat = self.termination_decoder(dist_feat)
+            trans_hidden = self.storm_transformer(
+                flattened_sample, action, temporal_mask
+            )
+            # Prior logits
+            prior_logits = self.dist_head.forward_prior(trans_hidden)
+            # Decoding reward and termination with trans_hidden
+            reward_hat = self.reward_decoder(trans_hidden)
+            termination_hat = self.termination_decoder(trans_hidden)
 
-            # env loss
+            # Env loss
             reconstruction_loss = self.mse_loss_func(obs_hat, obs)
             reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
             termination_loss = self.bce_with_logits_loss_func(
                 termination_hat, termination
             )
-            # dyn-rep loss
+            # Dyn-rep loss
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(
                 post_logits[:, 1:].detach(), prior_logits[:, :-1]
             )
@@ -547,12 +586,17 @@ class WorldModel(nn.Module):
                 + 0.1 * representation_loss
             )
 
-        # gradient descent
-        self.scaler.scale(total_loss).backward()
-        self.scaler.unscale_(self.optimizer)  # for clip grad
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        # Gradient descent
+        if self.scaler is not None:
+            self.scaler.scale(total_loss).backward()
+            self.scaler.unscale_(self.optimizer)  # for clip grad
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
+            self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
 
         if logger is not None:

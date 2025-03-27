@@ -25,14 +25,10 @@ import agents
 from sub_models.functions_losses import symexp
 from sub_models.world_models import WorldModel, MSELoss
 
-device = torch.device(
-    "mps"
-    if torch.backends.mps.is_available()
-    else ("cuda" if torch.cuda.is_available() else "cpu")
-)
+from sub_models.constants import DEVICE
 
 
-def build_single_env(env_name, image_size, seed):
+def build_single_env(env_name: str, image_size: int, seed: int):
     """
     Build a single env with wrappers and preprocesses env.
     """
@@ -50,7 +46,11 @@ def build_single_env(env_name, image_size, seed):
     return env
 
 
-def build_vec_env(env_name, image_size, num_envs, seed):
+def build_vec_env(env_name: str, image_size: int, num_envs: int, seed: int):
+    """
+    Build a vectorized env with n=num_envs parallel envs.
+    """
+
     # lambda pitfall refs to: https://python.plainenglish.io/python-pitfalls-with-variable-capture-dcfc113f39b7
     def lambda_generator(env_name, image_size):
         return lambda: build_single_env(env_name, image_size, seed)
@@ -61,17 +61,51 @@ def build_vec_env(env_name, image_size, num_envs, seed):
     return vec_env
 
 
+def build_world_model(conf, action_dim):
+    """
+    Return a world model with the specified configuration
+    """
+    return WorldModel(
+        in_channels=conf.Models.WorldModel.InChannels,
+        action_dim=action_dim,
+        transformer_max_length=conf.Models.WorldModel.TransformerMaxLength,
+        transformer_hidden_dim=conf.Models.WorldModel.TransformerHiddenDim,
+        transformer_num_layers=conf.Models.WorldModel.TransformerNumLayers,
+        transformer_num_heads=conf.Models.WorldModel.TransformerNumHeads,
+    ).to(DEVICE)
+
+
+def build_agent(conf, action_dim: int):
+    """
+    Return an agent with the specified configuration
+    """
+    return agents.ActorCriticAgent(
+        feat_dim=32 * 32 + conf.Models.WorldModel.TransformerHiddenDim,
+        num_layers=conf.Models.Agent.NumLayers,
+        hidden_dim=conf.Models.Agent.HiddenDim,
+        action_dim=action_dim,
+        gamma=conf.Models.Agent.Gamma,
+        lambd=conf.Models.Agent.Lambda,
+        entropy_coef=conf.Models.Agent.EntropyCoef,
+    ).to(DEVICE)
+
+
 def train_world_model_step(
     replay_buffer: ReplayBuffer,
     world_model: WorldModel,
-    batch_size,
+    batch_size: int,
     demonstration_batch_size,
-    batch_length,
+    batch_length: int,
     logger,
 ):
+    """
+    Train single step of the world model with the sampled data from replay buffer
+    """
+    # Sample from replay buffer
     obs, action, reward, termination = replay_buffer.sample(
         batch_size, demonstration_batch_size, batch_length
     )
+    # Train world model with the sampled data
     world_model.update(obs, action, reward, termination, logger=logger)
 
 
@@ -109,10 +143,10 @@ def world_model_imagine_data(
 
 
 def joint_train_world_model_agent(
-    env_name,
-    max_steps,
-    num_envs,
-    image_size,
+    env_name: str,
+    max_steps: str,
+    num_envs: int,
+    image_size: int,
     replay_buffer: ReplayBuffer,
     world_model: WorldModel,
     agent: agents.ActorCriticAgent,
@@ -151,18 +185,20 @@ def joint_train_world_model_agent(
     # sample and train
     for total_steps in tqdm(range(max_steps // num_envs)):
         # sample part >>>
-        if replay_buffer.ready():
+        if replay_buffer.ready:  # ready only after warmpup
+            # WM and Agent are in eval mode
             world_model.eval()
             agent.eval()
             with torch.no_grad():
                 if len(context_action) == 0:
+                    # this is the case in the first step
                     action = vec_env.action_space.sample()
                 else:
                     context_latent = world_model.encode_obs(
                         torch.cat(list(context_obs), dim=1)
                     )
                     model_context_action = np.stack(list(context_action), axis=1)
-                    model_context_action = torch.Tensor(model_context_action).to(device)
+                    model_context_action = torch.Tensor(model_context_action).to(DEVICE)
                     prior_flattened_sample, last_dist_feat = (
                         world_model.calc_last_dist_feat(
                             context_latent, model_context_action
@@ -172,22 +208,25 @@ def joint_train_world_model_agent(
                         torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
                         greedy=False,
                     )
-
+            # [B, H, W, C] -> [B, 1, C, H, W]
             context_obs.append(
-                rearrange(torch.Tensor(current_obs).to(device), "B H W C -> B 1 C H W")
+                torch.permute(
+                    torch.tensor(current_obs, device=DEVICE), (0, 3, 1, 2)
+                ).unsqueeze(1)
                 / 255
             )
             context_action.append(action)
         else:
             action = vec_env.action_space.sample()
-
+        # Perform action in the env and observe the next state, reward, done, truncated
         obs, reward, done, truncated, info = vec_env.step(action)
+        # Append the transition to the replay buffer
         replay_buffer.append(
             current_obs, action, reward, np.logical_or(done, info["life_loss"])
         )
 
         done_flag = np.logical_or(done, truncated)
-        if done_flag.any():
+        if done_flag.any():  # end of episode
             for i in range(num_envs):
                 if done_flag[i]:
                     logger.log(f"sample/{env_name}_reward", sum_reward[i])
@@ -198,15 +237,15 @@ def joint_train_world_model_agent(
                     logger.log("replay_buffer/length", len(replay_buffer))
                     sum_reward[i] = 0
 
-        # update current_obs, current_info and sum_reward
+        # Update current_obs, current_info and sum_reward
         sum_reward += reward
         current_obs = obs
         current_info = info
         # <<< sample part
 
-        # train world model part >>>
+        # Train world model part >>>
         if (
-            replay_buffer.ready()
+            replay_buffer.ready
             and total_steps % (train_dynamics_every_steps // num_envs) == 0
         ):
             train_world_model_step(
@@ -217,11 +256,12 @@ def joint_train_world_model_agent(
                 batch_length=batch_length,
                 logger=logger,
             )
-        # <<< train world model part
+        # <<< Train world model part
 
-        # train agent part >>>
+        # Train agent part >>>
+        # print("Training Agent...")
         if (
-            replay_buffer.ready()
+            replay_buffer.ready
             and total_steps % (train_agent_every_steps // num_envs) == 0
             and total_steps * num_envs >= 0
         ):
@@ -248,7 +288,7 @@ def joint_train_world_model_agent(
                 log_video=log_video,
                 logger=logger,
             )
-
+            # update agent with imagined data
             agent.update(
                 latent=imagine_latent,
                 action=agent_action,
@@ -258,7 +298,7 @@ def joint_train_world_model_agent(
                 termination=imagine_termination,
                 logger=logger,
             )
-        # <<< train agent part
+        # <<< Train agent part
 
         # save model per episode
         if total_steps % (save_every_steps // num_envs) == 0:
@@ -273,36 +313,14 @@ def joint_train_world_model_agent(
             torch.save(agent.state_dict(), f"ckpt/{args.n}/agent_{total_steps}.pth")
 
 
-def build_world_model(conf, action_dim):
-    return WorldModel(
-        in_channels=conf.Models.WorldModel.InChannels,
-        action_dim=action_dim,
-        transformer_max_length=conf.Models.WorldModel.TransformerMaxLength,
-        transformer_hidden_dim=conf.Models.WorldModel.TransformerHiddenDim,
-        transformer_num_layers=conf.Models.WorldModel.TransformerNumLayers,
-        transformer_num_heads=conf.Models.WorldModel.TransformerNumHeads,
-    ).to(device)
-
-
-def build_agent(conf, action_dim):
-    return agents.ActorCriticAgent(
-        feat_dim=32 * 32 + conf.Models.WorldModel.TransformerHiddenDim,
-        num_layers=conf.Models.Agent.NumLayers,
-        hidden_dim=conf.Models.Agent.HiddenDim,
-        action_dim=action_dim,
-        gamma=conf.Models.Agent.Gamma,
-        lambd=conf.Models.Agent.Lambda,
-        entropy_coef=conf.Models.Agent.EntropyCoef,
-    ).to(device)
-
-
 if __name__ == "__main__":
     # ignore warnings
     import warnings
 
     warnings.filterwarnings("ignore")
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     # parse arguments
     parser = argparse.ArgumentParser()
