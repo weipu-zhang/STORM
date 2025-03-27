@@ -7,7 +7,7 @@ BasicSettings:
 
 JointTrainAgent:
   SampleMaxSteps: 102000
-  BufferMaxLength: 100000
+  BufferMaxLength: 20000 # original=100000
   BufferWarmUp: 1024
   NumEnvs: 1
   BatchSize: 16

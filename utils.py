@@ -3,8 +3,6 @@ import os
 import numpy as np
 import random
 from tensorboardX import SummaryWriter
-from einops import repeat
-from contextlib import contextmanager
 import time
 import yacs
 from yacs.config import CfgNode as CN
@@ -12,7 +10,7 @@ from yacs.config import CfgNode as CN
 
 def seed_np_torch(seed=20010105):
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -22,7 +20,7 @@ def seed_np_torch(seed=20010105):
     torch.backends.cudnn.benchmark = False
 
 
-class Logger():
+class Logger:
     def __init__(self, path) -> None:
         self.writer = SummaryWriter(logdir=path, flush_secs=1)
         self.tag_step = {}
@@ -42,7 +40,7 @@ class Logger():
             self.writer.add_scalar(tag, value, self.tag_step[tag])
 
 
-class EMAScalar():
+class EMAScalar:
     def __init__(self, decay) -> None:
         self.scalar = 0.0
         self.decay = decay
