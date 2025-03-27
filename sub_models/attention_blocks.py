@@ -2,23 +2,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from einops import rearrange, repeat
+
+# from einops import rearrange, repeat
 
 
-def get_subsequent_mask(seq):
-    """For masking out the subsequent info."""
-    batch_size, batch_length = seq.shape[:2]
-    subsequent_mask = (
-        1
-        - torch.triu(
-            torch.ones((1, batch_length, batch_length), device=seq.device), diagonal=1
-        )
-    ).bool()
-    return subsequent_mask
-
-
-def get_subsequent_mask_with_batch_length(batch_length, device):
-    """For masking out the subsequent info."""
+def get_subsequent_mask_with_batch_length(batch_length: int, device: str):
+    """
+    For masking out the subsequent info.
+    Example: where batch_length = 5
+    tensor([[[ True, False, False, False, False],
+         [ True,  True, False, False, False],
+         [ True,  True,  True, False, False],
+         [ True,  True,  True,  True, False],
+         [ True,  True,  True,  True,  True]]], device='mps:0')
+    """
     subsequent_mask = (
         1
         - torch.triu(
@@ -28,7 +25,15 @@ def get_subsequent_mask_with_batch_length(batch_length, device):
     return subsequent_mask
 
 
-def get_vector_mask(batch_length, device):
+def get_subsequent_mask(seq):
+    """For masking out the subsequent info."""
+
+    batch_length = seq.shape[1]
+    subsequent_mask = get_subsequent_mask_with_batch_length(batch_length, seq.device)
+    return subsequent_mask
+
+
+def get_vector_mask(batch_length: int, device: str):
     mask = torch.ones((1, 1, batch_length), device=device).bool()
     # mask = torch.ones((1, batch_length, 1), device=device).bool()
     return mask
@@ -46,7 +51,8 @@ class ScaledDotProductAttention(nn.Module):
         attn = torch.matmul(q / self.temperature, k.transpose(2, 3))
 
         if mask is not None:
-            attn = attn.masked_fill(mask == 0, -1e9)
+            # Fill the masked part with -inf
+            attn = attn.masked_fill(mask == 0, -6e4)
 
         attn = self.dropout(F.softmax(attn, dim=-1))
         output = torch.matmul(attn, v)
@@ -75,34 +81,33 @@ class MultiHeadAttention(nn.Module):
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
 
     def forward(self, q, k, v, mask=None):
-        d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
-        sz_b, len_q, len_k, len_v = q.size(0), q.size(1), k.size(1), v.size(1)
-
+        # Get the size of the batch
+        batch_sz = q.size(0)
+        # Get the len of the input sequences
+        len_q, len_k, len_v = q.size(1), k.size(1), v.size(1)
         residual = q
+        # Pass through the pre-attention projection: [B, L, N_head * D_v]
+        # Separate different heads: [B, L, N_head, D_v]
+        q = self.w_qs(q).reshape(batch_sz, len_q, self.n_head, self.d_k)
+        k = self.w_ks(k).reshape(batch_sz, len_k, self.n_head, self.d_k)
+        v = self.w_vs(v).reshape(batch_sz, len_v, self.n_head, self.d_v)
 
-        # Pass through the pre-attention projection: b x lq x (n*dv)
-        # Separate different heads: b x lq x n x dv
-        q = self.w_qs(q).reshape(sz_b, len_q, n_head, d_k)
-        k = self.w_ks(k).reshape(sz_b, len_k, n_head, d_k)
-        v = self.w_vs(v).reshape(sz_b, len_v, n_head, d_v)
-
-        # Transpose for attention dot product: b x n x lq x dv
+        # Transpose for attention dot product,
+        # [B, L, N_head, D_v] -> [B, N_head, L, D_v]
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
         if mask is not None:
-            mask = mask.unsqueeze(1)  # For head axis broadcasting.
+            mask = mask.unsqueeze(1)  # Add head axis, broadcasting.
+        # The same network is shared across all the heads
+        feat, attn = self.attention(q, k, v, mask=mask)
 
-        q, attn = self.attention(q, k, v, mask=mask)
-
-        # Transpose to move the head dimension back: b x lq x n x dv
-        # Combine the last two dimensions to concatenate all the heads together: b x lq x (n*dv)
-        q = q.transpose(1, 2).contiguous().reshape(sz_b, len_q, -1)
-        q = self.dropout(self.fc(q))
-        q += residual
-
-        q = self.layer_norm(q)
-
-        return q, attn
+        # Transpose to move the head dimension back: [B, L, N_head, D_v]
+        # Combine the last two dimensions to concatenate all the heads together: [B, L, N_head * D_v]
+        feat = feat.transpose(1, 2).contiguous().reshape(batch_sz, len_q, -1)
+        feat = self.dropout(self.fc(feat))  # [B, L, N_head * D_v] -> [B, L, D_model]
+        feat += residual
+        feat = self.layer_norm(feat)
+        return feat, attn
 
 
 class PositionwiseFeedForward(nn.Module):
@@ -118,17 +123,18 @@ class PositionwiseFeedForward(nn.Module):
     def forward(self, x):
 
         residual = x
-
         x = self.w_2(F.relu(self.w_1(x)))
         x = self.dropout(x)
         x += residual
-
         x = self.layer_norm(x)
-
         return x
 
 
 class AttentionBlock(nn.Module):
+    """
+    Transformer block with multi-head attention and position-wise feed forward.
+    """
+
     def __init__(self, feat_dim, hidden_dim, num_heads, dropout):
         super().__init__()
         self.slf_attn = MultiHeadAttention(
@@ -176,15 +182,35 @@ class PositionalEncoding1D(nn.Module):
 
     def forward(self, feat):
         pos_emb = self.pos_emb(torch.arange(self.max_length, device=feat.device))
-        pos_emb = repeat(pos_emb, "L D -> B L D", B=feat.shape[0])
-
+        # Add a batch dimention: [L, D] -> [B, L, D]
+        pos_emb = pos_emb.unsqueeze(0).expand(
+            feat.shape[0], pos_emb.shape[0], pos_emb.shape[1]
+        )
+        # Match postion embedding to the length of the input feature
         feat = feat + pos_emb[:, : feat.shape[1], :]
         return feat
 
     def forward_with_position(self, feat, position):
         assert feat.shape[1] == 1
         pos_emb = self.pos_emb(torch.arange(self.max_length, device=feat.device))
-        pos_emb = repeat(pos_emb, "L D -> B L D", B=feat.shape[0])
-
+        # Add a batch dimention: [L, D] -> [B, L, D]
+        pos_emb = pos_emb.unsqueeze(0).expand(
+            feat.shape[0], pos_emb.shape[0], pos_emb.shape[1]
+        )
         feat = feat + pos_emb[:, position : position + 1, :]
         return feat
+
+
+if __name__ == "__main__":
+    # Test PositionalEncoding1D
+    # max_length = 5
+    # embed_dim = 3
+    # pos_encoder = PositionalEncoding1D(max_length, embed_dim)
+    # feat = torch.randn(2, 5, 3)
+    # print(feat)
+    # print(pos_encoder(feat))
+
+    # Test get_subsequent_mask
+    seq = torch.ones((1, 5, 5))
+    batch_size, batch_length = seq.shape[:2]
+    print(get_subsequent_mask(seq))
