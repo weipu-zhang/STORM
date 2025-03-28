@@ -7,7 +7,7 @@ from torch.cuda.amp import autocast
 
 from sub_models.functions_losses import SymLogTwoHotLoss
 from utils import EMAScalar
-from sub_models.constants import DEVICE
+from sub_models.constants import DEVICE, DTYPE_16
 
 
 def percentile(x, percentage):
@@ -148,7 +148,7 @@ class ActorCriticAgent(nn.Module):
         """
         self.eval()
         with torch.autocast(
-            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=DTYPE_16, enabled=self.use_amp
         ):
 
             action_logits = self.policy(latent)
@@ -171,7 +171,7 @@ class ActorCriticAgent(nn.Module):
         """
         self.train()
         with torch.autocast(
-            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=DTYPE_16, enabled=self.use_amp
         ):
             logits, raw_value = self.get_logits_raw_value(latent)
             dist = distributions.Categorical(logits=logits[:, :-1])

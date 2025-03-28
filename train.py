@@ -139,6 +139,7 @@ def world_model_imagine_data(
         log_video=log_video,
         logger=logger,
     )
+    # latent: prior_flattened_sample + transformer hidden states
     return latent, action, None, None, reward_hat, termination_hat
 
 
@@ -217,9 +218,12 @@ def joint_train_world_model_agent(
             )
             context_action.append(action)
         else:
+            # simply sample random action
             action = vec_env.action_space.sample()
+
         # Perform action in the env and observe the next state, reward, done, truncated
         obs, reward, done, truncated, info = vec_env.step(action)
+
         # Append the transition to the replay buffer
         replay_buffer.append(
             current_obs, action, reward, np.logical_or(done, info["life_loss"])
@@ -271,10 +275,10 @@ def joint_train_world_model_agent(
                 log_video = False
 
             (
-                imagine_latent,
+                imagine_latent,  # prior_flattened_sample + transformer hidden states
                 agent_action,
-                agent_logprob,
-                agent_value,
+                agent_logprob,  # None
+                agent_value,  # None
                 imagine_reward,
                 imagine_termination,
             ) = world_model_imagine_data(
@@ -288,7 +292,7 @@ def joint_train_world_model_agent(
                 log_video=log_video,
                 logger=logger,
             )
-            # update agent with imagined data
+            # Update agent with imagined data
             agent.update(
                 latent=imagine_latent,
                 action=agent_action,

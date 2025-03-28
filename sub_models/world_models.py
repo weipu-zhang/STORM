@@ -13,7 +13,7 @@ from sub_models.attention_blocks import (
     get_subsequent_mask,
 )
 from sub_models.transformer_model import StochasticTransformerKVCache
-from sub_models.constants import DEVICE
+from sub_models.constants import DEVICE, DTYPE_16
 import agents
 
 
@@ -343,7 +343,7 @@ class WorldModel(nn.Module):
         """
 
         with torch.autocast(
-            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=DTYPE_16, enabled=self.use_amp
         ):
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
@@ -356,7 +356,7 @@ class WorldModel(nn.Module):
 
     def calc_last_dist_feat(self, latent, action):
         with torch.autocast(
-            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=DTYPE_16, enabled=self.use_amp
         ):
             temporal_mask = get_subsequent_mask(latent)
             dist_feat = self.storm_transformer(latent, action, temporal_mask)
@@ -369,15 +369,20 @@ class WorldModel(nn.Module):
         return prior_flattened_sample, last_dist_feat
 
     def predict_next(self, last_flattened_sample, action, log_video=True):
+        """
+        A single step of world model prediction in the imagination phase.
+        """
         with torch.autocast(
-            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=DTYPE_16, enabled=self.use_amp
         ):
-            dist_feat = self.storm_transformer.forward_with_kv_cache(
+            # posterior_logits sample + action -> trasnformer hidden states
+            trans_feat = self.storm_transformer.forward_with_kv_cache(
                 last_flattened_sample, action
             )
-            prior_logits = self.dist_head.forward_prior(dist_feat)
+            # trasnformer hidden states -> prior_logits
+            prior_logits = self.dist_head.forward_prior(trans_feat)
 
-            # decoding
+            # decoding: prior_logits -> prior_sample -> prior_flattened_sample
             prior_sample = self.stright_throught_gradient(
                 prior_logits, sample_mode="random_sample"
             )
@@ -386,12 +391,13 @@ class WorldModel(nn.Module):
                 obs_hat = self.image_decoder(prior_flattened_sample)
             else:
                 obs_hat = None
-            reward_hat = self.reward_decoder(dist_feat)
+            # decode reward and termination
+            reward_hat = self.reward_decoder(trans_feat)
             reward_hat = self.symlog_twohot_loss_func.decode(reward_hat)
-            termination_hat = self.termination_decoder(dist_feat)
+            termination_hat = self.termination_decoder(trans_feat)
             termination_hat = termination_hat > 0
 
-        return obs_hat, reward_hat, termination_hat, prior_flattened_sample, dist_feat
+        return obs_hat, reward_hat, termination_hat, prior_flattened_sample, trans_feat
 
     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
         dist = OneHotCategorical(logits=logits)
@@ -462,6 +468,7 @@ class WorldModel(nn.Module):
         )
         # context
         context_latent = self.encode_obs(sample_obs)
+        # This loop is where the incremental prediction happens
         for i in range(sample_obs.shape[1]):  # context_length is sample_obs.shape[1]
             (
                 last_obs_hat,
@@ -494,14 +501,14 @@ class WorldModel(nn.Module):
                 last_obs_hat,
                 last_reward_hat,
                 last_termination_hat,
-                last_latent,
-                last_dist_feat,
+                last_latent,  # prior_flattened_sample
+                last_dist_feat,  # transformer hidden states
             ) = self.predict_next(
                 self.latent_buffer[:, i : i + 1],
                 self.action_buffer[:, i : i + 1],
                 log_video=log_video,
             )
-
+            # store variables in the next index
             self.latent_buffer[:, i + 1 : i + 2] = last_latent
             self.hidden_buffer[:, i + 1 : i + 2] = last_dist_feat
             self.reward_hat_buffer[:, i : i + 1] = last_reward_hat
@@ -535,7 +542,7 @@ class WorldModel(nn.Module):
         self.train()
         batch_size, batch_length = obs.shape[:2]  # B, L
         with torch.autocast(
-            device_type=DEVICE.type, dtype=torch.float16, enabled=self.use_amp
+            device_type=DEVICE.type, dtype=DTYPE_16, enabled=self.use_amp
         ):
             # Encoding and sampling from posterior
             # [B, L, C, H, W] -> [B, L, K*K];   K = stoch_dim

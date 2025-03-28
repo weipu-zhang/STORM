@@ -29,16 +29,28 @@ reward = torch.randn(16, 64).to(DEVICE)
 termination = torch.randn(16, 64).to(DEVICE)
 
 # Define world_model
-print("Defining the world model")
-world_model = WorldModel(
-    in_channels=3,
-    action_dim=64,
-    transformer_max_length=64,
-    transformer_hidden_dim=512,
-    transformer_num_layers=2,
-    transformer_num_heads=8,
-).to(DEVICE)
+# print("Defining the world model")
+# world_model = WorldModel(
+#     in_channels=3,
+#     action_dim=64,
+#     transformer_max_length=64,
+#     transformer_hidden_dim=512,
+#     transformer_num_layers=2,
+#     transformer_num_heads=8,
+# ).to(DEVICE)
 
-# Test world model update
-print("Testing world model update")
-world_model.update(obs, action, reward, termination, logger=None)
+# # Test world model update
+# print("Testing world model update")
+# world_model.update(obs, action, reward, termination, logger=None)
+
+if not torch.backends.mps.is_available():
+    if not torch.backends.mps.is_built():
+        print(
+            "MPS not available because the current PyTorch install was not "
+            "built with MPS enabled."
+        )
+    else:
+        print(
+            "MPS not available because the current MacOS version is not 12.3+ "
+            "and/or you do not have an MPS-enabled device on this machine."
+        )
