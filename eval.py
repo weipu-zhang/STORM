@@ -37,6 +37,9 @@ def build_single_env(env_name, image_size):
     env = gymnasium.make(
         env_name, full_action_space=False, render_mode="rgb_array", frameskip=1
     )
+    # Convert int to tuple as gymnasium.wrappers.ResizeObservation requires tuple
+    if isinstance(image_size, int):
+        image_size = (image_size, image_size)
     env = env_wrapper.MaxLast2FrameSkipWrapper(env, skip=4)
     env = gymnasium.wrappers.ResizeObservation(env, shape=image_size)
     return env
@@ -184,6 +187,7 @@ if __name__ == "__main__":
             agent=agent,
         )
         results.append([step, episode_avg_return])
+    os.makedirs("./eval_result", exist_ok=True)
     with open(f"eval_result/{args.run_name}.csv", "w") as fout:
         fout.write("step, episode_avg_return\n")
         for step, episode_avg_return in results:
