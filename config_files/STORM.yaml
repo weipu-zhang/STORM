@@ -10,7 +10,7 @@ JointTrainAgent:
   BufferMaxLength: 100000
   BufferWarmUp: 1024
   NumEnvs: 1
-  BatchSize: 16
+  BatchSize: 64
   DemonstrationBatchSize: 4
   BatchLength: 64
   ImagineBatchSize: 1024
